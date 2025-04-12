@@ -1,0 +1,238 @@
+
+package com.OnlineExam.security;
+
+import org.springframework.context.annotation.Configuration;
+import org.springframework.web.servlet.config.annotation.CorsRegistry;
+import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
+
+@Configuration
+public class webConfig implements WebMvcConfigurer {
+
+        @Override
+        public void addCorsMappings(CorsRegistry registry) {
+                registry.addMapping("/**")
+                                .allowedOrigins("http://localhost:5173")
+                                .allowedMethods("GET", "POST", "PUT", "DELETE", "PATCH")
+                                .allowedHeaders("*")
+                                .allowCredentials(true);
+        }
+}
+
+
+
+
+
+*************************** security
+
+
+
+package com.OnlineExam.security;
+
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
+import org.springframework.security.config.annotation.web.builders.HttpSecurity;
+import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
+import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
+import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.security.web.SecurityFilterChain;
+import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
+
+import com.OnlineExam.token.JwtAuthFilter;
+
+@Configuration
+@EnableWebSecurity
+@EnableMethodSecurity
+public class SecurityConfig {
+
+        @Autowired
+        private JwtAuthFilter jwtAuthFilter;
+
+        @SuppressWarnings({ "deprecation", "removal" })
+        @Bean
+        public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
+                http.csrf(csrf -> csrf.disable())
+                                .authorizeRequests(authz -> authz
+                                                .requestMatchers("/**", "/teachers/**", "/teachers/send",
+                                                                "/question-papers/**",
+                                                                "/institute/**", "/email/**", "/twilio/**")
+                                                .permitAll()
+                                                .anyRequest().authenticated())
+                                .oauth2Login(oauth2 -> oauth2
+                                                .defaultSuccessUrl("http://localhost:5173/demo", true))
+                                .addFilterBefore(jwtAuthFilter, UsernamePasswordAuthenticationFilter.class);
+
+                return http.build();
+        }
+
+        @Bean
+        public PasswordEncoder passwordEncoder() {
+                return new BCryptPasswordEncoder(); // Password encoder for internal authentication
+        }
+}
+
+
+
+
+************************** jwtAuthFilter
+
+package com.OnlineExam.token;
+
+import java.io.IOException;
+import java.util.ArrayList;
+
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.stereotype.Component;
+import org.springframework.web.filter.OncePerRequestFilter;
+
+import jakarta.servlet.FilterChain;
+import jakarta.servlet.ServletException;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
+
+@Component
+public class JwtAuthFilter extends OncePerRequestFilter {
+    public final JwtUtils jwtUtils;
+
+    public JwtAuthFilter(JwtUtils jwtUtils) {
+        this.jwtUtils = jwtUtils;
+    }
+
+    @Override
+    protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain filterChain)
+            throws ServletException, IOException {
+
+        String authrizeHeader = request.getHeader("Authorization");
+        if (authrizeHeader != null && authrizeHeader.startsWith("Bearer ")) {
+            String token = authrizeHeader.substring(7);
+
+            try {
+                String username = jwtUtils.extractSubject(token);
+                if (username != null && jwtUtils.isTokenValid(token, username)) {
+                    SecurityContextHolder.getContext()
+                            .setAuthentication(
+                                    new UsernamePasswordAuthenticationToken(username, null, new ArrayList<>()));
+                }
+
+            } catch (Exception e) {
+                response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
+                return;
+            }
+        }
+        filterChain.doFilter(request, response);
+
+    }
+
+}
+
+
+**********************JwtUtils
+
+
+package com.OnlineExam.token;
+
+import java.util.Date;
+import java.util.function.Function;
+
+import org.springframework.stereotype.Component;
+
+import io.jsonwebtoken.Claims;
+import io.jsonwebtoken.Jwts;
+import io.jsonwebtoken.SignatureAlgorithm;
+
+@Component
+public class JwtUtils {
+
+    public String SECRET_KEY = "hideviamyourpastpleaseremembermetillthesunawake393424luin";
+    public long EXPIRATION_TIME = 1000 * 60 * 60;
+
+    @SuppressWarnings("deprecation")
+    public String generateToken(String username) {
+        return Jwts.builder()
+                .setSubject(username)
+                .setIssuedAt(new Date())
+                .setExpiration(new Date(System.currentTimeMillis() + EXPIRATION_TIME))
+                .signWith(SignatureAlgorithm.HS256, SECRET_KEY)
+                .compact();
+    }
+
+    public String extractSubject(String token) {
+        return extractClaim(token, Claims::getSubject);
+    }
+
+    public <T> T extractClaim(String token, Function<Claims, T> getClaims) {
+        Claims claims = extractAllClaims(token);
+        return getClaims.apply(claims);
+    }
+
+    @SuppressWarnings("deprecation")
+    private Claims extractAllClaims(String token) {
+        return Jwts.parser()
+                .setSigningKey(SECRET_KEY)
+                .build()
+                .parseClaimsJws(token)
+                .getBody();
+    }
+
+    public boolean isTokenValid(String token, String username) {
+        return (username.equals(extractSubject(token)) && !isTokenExpired(token));
+    }
+
+    public boolean isTokenExpired(String token) {
+        return extractClaim(token, Claims::getExpiration).before(new Date());
+    }
+**************************** jtokenretrive
+
+
+package com.OnlineExam.token;
+
+import com.OnlineExam.model.Student;
+import com.OnlineExam.model.Teacher;
+import com.fasterxml.jackson.annotation.JsonInclude;
+import com.fasterxml.jackson.annotation.JsonInclude.Include;
+
+@JsonInclude(value = Include.NON_NULL)
+public class JwtTokenRetrive {
+
+    private Teacher teacher;
+    private Student student;
+    private String token;
+
+    public JwtTokenRetrive(Teacher teacher, String token) {
+        this.teacher = teacher;
+        this.token = token;
+    }
+
+    public JwtTokenRetrive(Student student, String token) {
+        this.student = student;
+        this.token = token;
+    }
+
+    public Teacher getTeacher() {
+        return teacher;
+    }
+
+    public void setTeacher(Teacher teacher) {
+        this.teacher = teacher;
+    }
+
+    public Student getStudent() {
+        return student;
+    }
+
+    public void setStudent(Student student) {
+        this.student = student;
+    }
+
+    public String getToken() {
+        return token;
+    }
+
+    public void setToken(String token) {
+        this.token = token;
+    }
+
+}
+
